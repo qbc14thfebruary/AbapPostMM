@@ -1,0 +1,655 @@
+
+FORM CHECK_FILE_EXITS .
+  DATA: LW_FILE   TYPE STRING,
+        LW_RESULT TYPE ABAP_BOOL.
+
+  LW_FILE = P_FILE.
+  SEARCH LW_FILE FOR '.xlsx'.
+  IF SY-SUBRC <> 0.
+    MESSAGE 'File must be MS Excel' TYPE 'E'.
+  ELSE.
+    CALL METHOD CL_GUI_FRONTEND_SERVICES=>FILE_EXIST
+      EXPORTING
+        FILE                 = LW_FILE
+      RECEIVING
+        RESULT               = LW_RESULT
+      EXCEPTIONS
+        CNTL_ERROR           = 1
+        ERROR_NO_GUI         = 2
+        WRONG_PARAMETER      = 3
+        NOT_SUPPORTED_BY_GUI = 4
+        OTHERS               = 5.
+    IF LW_RESULT IS INITIAL.
+      MESSAGE 'File is not exist' TYPE 'E'.
+      LEAVE LIST-PROCESSING.
+    ENDIF.
+  ENDIF.
+ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form READ_FILE
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*& -->  p1        text
+*& <--  p2        text
+*&---------------------------------------------------------------------*
+FORM READ_FILE .
+  DATA: IT_TYPE   TYPE TRUXS_T_TEXT_DATA.
+
+*-------------------------------------------------*
+  CALL FUNCTION 'TEXT_CONVERT_XLS_TO_SAP'
+    EXPORTING
+      I_LINE_HEADER        = 'X'
+      I_TAB_RAW_DATA       = IT_TYPE
+      I_FILENAME           = P_FILE
+    TABLES
+      I_TAB_CONVERTED_DATA = GT_RAW
+    EXCEPTIONS
+      CONVERSION_FAILED    = 1
+      OTHERS               = 2.
+
+  IF SY-SUBRC =  1.
+    MESSAGE 'Conservation failed' TYPE 'S' DISPLAY LIKE 'E'.
+    STOP.
+  ELSEIF SY-SUBRC = 2.
+    MESSAGE 'Could not upload data' TYPE 'S' DISPLAY LIKE 'E'.
+    STOP.
+  ENDIF.
+ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form CHECK_RAW_DATA
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*& -->  p1        text
+*& <--  p2        text
+*&---------------------------------------------------------------------*
+FORM CHECK_RAW_DATA .
+
+  DATA: LS_ALV TYPE TY_DISPLAY.
+  DATA: LV_ERR TYPE C LENGTH 1,
+        LV_MSG TYPE STRING.
+
+  IF GT_RAW IS NOT INITIAL.
+    SELECT EBELN,
+           EBELP,
+           LOEKZ,
+           MATNR,
+           TXZ01,
+           MENGE,
+           MEINS,
+           WERKS,
+           LGORT
+      INTO TABLE @DATA(LT_EKPO)
+      FROM EKPO
+      FOR ALL ENTRIES IN @GT_RAW
+      WHERE EBELN = @GT_RAW-EBELN.
+  ENDIF.
+
+  LOOP AT GT_RAW ASSIGNING FIELD-SYMBOL(<FS_RAW>).
+
+    CLEAR: LS_ALV.
+    CLEAR: LV_ERR.
+
+*   CHECK POSTING DATE
+    PERFORM CHECK_POSDATE USING    <FS_RAW>-BUDAT "POSTING DATE
+                          CHANGING LS_ALV-BUDAT   "POSTING DATE
+                                   LS_ALV-STATUS
+                                   LS_ALV-COMMENT.
+*    TEXT
+    LS_ALV-TNGH = <FS_RAW>-TNGH.
+
+*    PO NUMBER
+    LS_ALV-EBELN = <FS_RAW>-EBELN.
+
+*    ITEM NUMBER
+    LS_ALV-EBELP = <FS_RAW>-EBELP.
+
+*    CHECK MATERIAL NUMBER
+    READ TABLE LT_EKPO INTO DATA(LS_EKPO) WITH KEY EBELN = <FS_RAW>-EBELN
+                                                   EBELP = <FS_RAW>-EBELP.
+    IF SY-SUBRC <> 0.
+      LS_ALV-STATUS = '1'.
+      CLEAR: LV_MSG.
+      LV_MSG = 'PO does not exist'.
+      IF LS_ALV-COMMENT IS NOT INITIAL.
+        CONCATENATE LS_ALV-COMMENT LV_MSG INTO LS_ALV-COMMENT SEPARATED BY ';'.
+      ELSE.
+        LS_ALV-COMMENT = LV_MSG.
+      ENDIF.
+    ELSE.
+
+      IF <FS_RAW>-MATNR <> LS_EKPO-MATNR.
+        LS_ALV-STATUS = '1'.
+        CLEAR: LV_MSG.
+        LV_MSG = 'Material numbr is incorrect'.
+        IF LS_ALV-COMMENT IS NOT INITIAL.
+          CONCATENATE LS_ALV-COMMENT LV_MSG INTO LS_ALV-COMMENT SEPARATED BY ';'.
+        ELSE.
+          LS_ALV-COMMENT = LV_MSG.
+        ENDIF.
+      ENDIF.
+
+      LS_ALV-MATNR = LS_EKPO-MATNR.
+      LS_ALV-MEINS = LS_EKPO-MEINS.
+      LS_ALV-MAKTX = LS_EKPO-TXZ01.
+*      LS_ALV-SERNP = LS_EKPO-SERNP.
+      IF LS_EKPO-LOEKZ = 'L'.
+        LS_ALV-STATUS = '1'.
+        LV_MSG = 'PO item is deleted'.
+        IF LS_ALV-COMMENT IS NOT INITIAL.
+          CONCATENATE LS_ALV-COMMENT LV_MSG INTO LS_ALV-COMMENT SEPARATED BY ';'.
+        ELSE.
+          LS_ALV-COMMENT = LV_MSG.
+        ENDIF.
+      ENDIF.
+
+*      IF LS_EKPO-SERNP IS INITIAL AND <FS_RAW>-SERIAL IS NOT INITIAL.
+*        LS_ALV-STATUS = '1'.
+*        LV_MSG = 'Material is not maintain serial profile'.
+*        IF LS_ALV-COMMENT IS NOT INITIAL.
+*          CONCATENATE LS_ALV-COMMENT LV_MSG INTO LS_ALV-COMMENT SEPARATED BY ';'.
+*        ELSE.
+*          LS_ALV-COMMENT = LV_MSG.
+*        ENDIF.
+*      ENDIF.
+*      IF LS_EKPO-SERNP IS NOT INITIAL AND <FS_RAW>-SERIAL IS INITIAL.
+*        LS_ALV-STATUS = '1'.
+*        LV_MSG = 'Must input serial'.
+*        IF LS_ALV-COMMENT IS NOT INITIAL.
+*          CONCATENATE LS_ALV-COMMENT LV_MSG INTO LS_ALV-COMMENT SEPARATED BY ';'.
+*        ELSE.
+*          LS_ALV-COMMENT = LV_MSG.
+*        ENDIF.
+*      ENDIF.
+    ENDIF.
+
+*    PLANT
+    PERFORM CHECK_PLANT USING    <FS_RAW>-PLANT
+                        CHANGING LS_ALV-PLANT   "PLANT
+                                 LS_ALV-STATUS
+                                 LS_ALV-COMMENT.
+
+*    RECEIVING SLOC
+    PERFORM CHECK_SLOC USING    <FS_RAW>-SLOC
+                                <FS_RAW>-PLANT
+                       CHANGING LS_ALV-SLOC
+                                LS_ALV-STATUS
+                                LS_ALV-COMMENT.
+
+*    QUANTITY.
+    PERFORM CHECK_QUANTITY USING    <FS_RAW>-QTY
+                           CHANGING LS_ALV-QTY
+                                    LS_ALV-STATUS
+                                    LS_ALV-COMMENT.
+
+*  SERIAL NUMBER
+    LS_ALV-SERIAL = <FS_RAW>-SERIAL.
+
+*  MOVEMENT TYPE
+    IF <FS_RAW>-MOVE_TYPE IS INITIAL.
+      LS_ALV-STATUS = '1'.
+      CLEAR: LV_MSG.
+      LV_MSG = 'Movement type must be incorect'.
+      IF LS_ALV-COMMENT IS NOT INITIAL.
+        CONCATENATE LS_ALV-COMMENT LV_MSG INTO LS_ALV-COMMENT SEPARATED BY ';'.
+      ELSE.
+        LS_ALV-COMMENT = LV_MSG.
+      ENDIF.
+    ELSE.
+      LS_ALV-MOVE_TYPE = <FS_RAW>-MOVE_TYPE.
+    ENDIF.
+
+*   APPEND TO INTERAL TABLE
+    APPEND LS_ALV TO GT_ALV.
+    CLEAR: LS_ALV.
+  ENDLOOP.
+*  BREAK QUYNHBC.
+ENDFORM.
+FORM CHECK_POSDATE  USING P_DATE        TYPE STRING
+                 CHANGING P_BUDAT       TYPE BUDAT
+                          P_STATUS      TYPE CHAR4
+                          P_COMMENT     TYPE CHAR2048.
+
+  DATA: LV_DATE TYPE DATS.
+  DATA: P_ERROR    TYPE CHAR1,
+        P_MESSAGE  TYPE STRING,
+        P_MESSAGE1 TYPE STRING,
+        P_MESSAGE2 TYPE STRING.
+  CLEAR: P_ERROR, P_MESSAGE, P_MESSAGE1, P_MESSAGE2.
+
+  IF P_DATE IS INITIAL .
+    P_ERROR = 'X'.
+    P_MESSAGE = 'Posting date must be required'.
+    EXIT.
+  ENDIF.
+
+  IF STRLEN( P_DATE ) <> 10.
+    P_ERROR = 'X'.
+    P_MESSAGE1 = 'Posting date is invalid format DD.MM.YYYY'.
+    EXIT.
+  ENDIF.
+
+  CONCATENATE P_DATE+6(4) P_DATE+3(2) P_DATE+0(2) INTO LV_DATE.
+  CALL FUNCTION 'DATE_CHECK_PLAUSIBILITY'
+    EXPORTING
+      DATE                      = LV_DATE
+    EXCEPTIONS
+      PLAUSIBILITY_CHECK_FAILED = 1
+      OTHERS                    = 2.
+
+  IF SY-SUBRC <> 0.
+    P_ERROR = 'X'.
+    P_MESSAGE2 = 'Posting date is invalid format'.
+  ENDIF.
+
+
+  IF P_ERROR IS NOT INITIAL.
+    P_STATUS = '1'.
+    IF P_COMMENT IS NOT INITIAL.
+      CONCATENATE P_COMMENT P_MESSAGE P_MESSAGE1 P_MESSAGE2 INTO P_COMMENT SEPARATED BY ':'.
+    ELSE.
+      P_COMMENT = | { P_MESSAGE } ; { P_MESSAGE1 } ; { P_MESSAGE2 } |.
+    ENDIF.
+  ELSE.
+    P_BUDAT = LV_DATE.
+
+  ENDIF.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form CHECK_PLANT
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*&      --> <FS_RAW>_PLANT
+*&      <-- LS_ALV_PLANT
+*&      <-- LS_ALV_STATUS
+*&      <-- LS_ALV_COMMENT
+*&---------------------------------------------------------------------*
+FORM CHECK_PLANT  USING    P_RAW_PLANT TYPE STRING
+                  CHANGING P_PLANT     TYPE WERKS_D
+                           P_STATUS    TYPE CHAR4
+                           P_COMMENT   TYPE CHAR2048.
+  DATA: P_ERROR    TYPE CHAR1,
+        P_MESSAGE  TYPE STRING,
+        P_MESSAGE1 TYPE STRING.
+  CLEAR: P_ERROR, P_MESSAGE, P_MESSAGE1.
+
+  DATA: LV_PLANT TYPE WERKS_D.
+
+  IF P_RAW_PLANT IS INITIAL.
+    P_ERROR = '1'.
+    P_MESSAGE = 'Plant cannot be blank'.
+  ENDIF.
+
+  LV_PLANT = P_RAW_PLANT.
+
+  SELECT SINGLE WERKS FROM T001W INTO @DATA(LV_WERKS) WHERE WERKS = @LV_PLANT.
+  IF SY-SUBRC <> 0.
+    P_ERROR = '1'.
+    P_MESSAGE1 = 'Plant doest not exist'.
+  ENDIF.
+
+  IF P_ERROR IS NOT INITIAL.
+    P_STATUS = '1'.
+    IF P_COMMENT IS NOT INITIAL.
+      CONCATENATE P_COMMENT P_MESSAGE P_MESSAGE1 INTO P_COMMENT SEPARATED BY ':'.
+    ELSE.
+      P_COMMENT = | { P_MESSAGE } ; { P_MESSAGE1 } |.
+    ENDIF.
+  ELSE.
+    P_PLANT = LV_PLANT.
+
+  ENDIF.
+ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form CHECK_SLOC
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*&      --> <FS_RAW>_SLOC
+*&      <-- LS_ALV_SLOC
+*&      <-- LS_ALV_STATUS
+*&      <-- LS_ALV_COMMENT
+*&---------------------------------------------------------------------*
+FORM CHECK_SLOC  USING    P_RAW_SLOC  TYPE STRING
+                          P_RAW_PLANT TYPE STRING
+                 CHANGING P_SLOC      TYPE LGORT_D
+                          P_STATUS    TYPE CHAR4
+                          P_COMMENT   TYPE CHAR2048.
+  DATA: P_ERROR    TYPE CHAR1,
+        P_MESSAGE  TYPE STRING,
+        P_MESSAGE1 TYPE STRING.
+  CLEAR: P_ERROR, P_MESSAGE, P_MESSAGE1.
+
+  DATA: LV_SLOC  TYPE LGORT_D,
+        LV_PLANT TYPE WERKS_D.
+
+  IF P_RAW_SLOC IS INITIAL.
+    P_ERROR = '1'.
+    P_MESSAGE = 'Sloc cannot be blank'.
+  ENDIF.
+
+  LV_SLOC = P_RAW_SLOC.
+  LV_PLANT = P_RAW_PLANT.
+
+  SELECT SINGLE LGORT FROM T001L INTO @DATA(LV_LGORT) WHERE WERKS = @LV_PLANT AND
+                                                            LGORT = @LV_SLOC.
+  IF SY-SUBRC <> 0.
+    P_ERROR = '1'.
+    P_MESSAGE1 = 'Sloc does not exist'.
+  ENDIF.
+
+  IF P_ERROR IS NOT INITIAL.
+    P_STATUS = '1'.
+    IF P_COMMENT IS NOT INITIAL.
+      CONCATENATE P_COMMENT P_MESSAGE P_MESSAGE1 INTO P_COMMENT SEPARATED BY ':'.
+    ELSE.
+      P_COMMENT = | { P_MESSAGE } ; { P_MESSAGE1 } |.
+    ENDIF.
+  ELSE.
+    P_SLOC = LV_SLOC.
+  ENDIF.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form CHECK_QUANTITY
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*&      --> <FS_RAW>_QTY
+*&      <-- LS_ALV_QTY
+*&      <-- LS_ALV_STATUS
+*&      <-- LS_ALV_COMMENT
+*&---------------------------------------------------------------------*
+FORM CHECK_QUANTITY  USING    P_RAW_QTY TYPE STRING
+                     CHANGING P_QTY     TYPE MENGE_D
+                              P_STATUS  TYPE CHAR4
+                              P_COMMENT TYPE CHAR2048.
+  DATA: LV_DATATYPE TYPE DD01V-DATATYPE.
+
+  DATA: P_ERROR    TYPE CHAR1,
+        P_MESSAGE  TYPE STRING,
+        P_MESSAGE1 TYPE STRING.
+  CLEAR: P_ERROR, P_MESSAGE, P_MESSAGE1.
+
+  IF P_RAW_QTY IS INITIAL.
+    P_ERROR = '1'.
+    P_MESSAGE = 'Local amount must be required'.
+    EXIT.
+  ENDIF.
+
+  CALL FUNCTION 'NUMERIC_CHECK'
+    EXPORTING
+      STRING_IN = P_RAW_QTY
+    IMPORTING
+*     string_out =
+      HTYPE     = LV_DATATYPE.
+
+
+  IF LV_DATATYPE <> 'NUMC'.
+    P_ERROR = '1'.
+    P_MESSAGE1 = 'Quantity is invalid'.
+  ENDIF.
+
+  IF P_ERROR IS NOT INITIAL.
+    P_STATUS = '1'.
+    IF P_COMMENT IS NOT INITIAL.
+      CONCATENATE P_COMMENT P_MESSAGE P_MESSAGE1 INTO P_COMMENT SEPARATED BY ':'.
+    ELSE.
+      P_COMMENT = | { P_MESSAGE } ; { P_MESSAGE1 } |.
+    ENDIF.
+  ELSE.
+    P_QTY = P_RAW_QTY.
+  ENDIF.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form DISPLAY_ALV
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*& -->  p1        text
+*& <--  p2        text
+*&---------------------------------------------------------------------*
+FORM DISPLAY_ALV .
+  DATA: LT_FIELDCAT  TYPE SLIS_T_FIELDCAT_ALV .
+  DATA: LS_FIELD TYPE SLIS_FIELDCAT_ALV.
+  DATA: LS_LAYO TYPE SLIS_LAYOUT_ALV.
+  LS_LAYO-COLWIDTH_OPTIMIZE = 'X'.
+
+  PERFORM SET_UP_FIELDCAT USING 1  'STATUS'  'T_OUTPUT' 'Status'
+                          CHANGING LT_FIELDCAT.
+  PERFORM SET_UP_FIELDCAT USING 2  'COMMENT' 'T_OUTPUT' 'Commnent'
+                          CHANGING LT_FIELDCAT.
+  PERFORM SET_UP_FIELDCAT USING 3  'BUDAT'   'T_OUTPUT' 'Posting Date'
+                          CHANGING LT_FIELDCAT.
+  PERFORM SET_UP_FIELDCAT USING 4  'TNGH'    'T_OUTPUT' 'Tex Item'
+                          CHANGING LT_FIELDCAT.
+  PERFORM SET_UP_FIELDCAT USING 5  'EBELN'   'T_OUTPUT' 'Purchasing Document Number'
+                          CHANGING LT_FIELDCAT.
+  PERFORM SET_UP_FIELDCAT USING 6  'EBELP'   'T_OUTPUT' 'Item Number'
+                          CHANGING LT_FIELDCAT.
+  PERFORM SET_UP_FIELDCAT USING 7  'MATNR'   'T_OUTPUT' 'Material Number'
+                          CHANGING LT_FIELDCAT.
+  PERFORM SET_UP_FIELDCAT USING 8  'MAKTX'   'T_OUTPUT' 'Material description'
+                          CHANGING LT_FIELDCAT.
+  PERFORM SET_UP_FIELDCAT USING 9  'PLANT'   'T_OUTPUT' 'Plant'
+                          CHANGING LT_FIELDCAT.
+  PERFORM SET_UP_FIELDCAT USING 10 'SLOC'    'T_OUTPUT' 'Storage location'
+                          CHANGING LT_FIELDCAT.
+  PERFORM SET_UP_FIELDCAT USING 11 'QTY'     'T_OUTPUT' 'Quantity'
+                          CHANGING LT_FIELDCAT.
+  PERFORM SET_UP_FIELDCAT USING 12 'MEINS'   'T_OUTPUT' 'Base Unit'
+                          CHANGING LT_FIELDCAT.
+  PERFORM SET_UP_FIELDCAT USING 13 'SERIAL'  'T_OUTPUT' 'Serial Number'
+                          CHANGING LT_FIELDCAT.
+  PERFORM SET_UP_FIELDCAT USING 15 'MOVE_TYPE' 'T_OUTPUT' 'Movement Type'
+                          CHANGING LT_FIELDCAT.
+
+  LOOP AT GT_ALV INTO DATA(LS_ALV) .
+    IF LS_ALV-STATUS IS INITIAL .
+      SELECT SINGLE ID FROM ICON WHERE NAME = 'ICON_GREEN_LIGHT' INTO @LS_ALV-STATUS.
+    ELSE.
+      SELECT SINGLE ID FROM ICON WHERE NAME = 'ICON_RED_LIGHT'   INTO @LS_ALV-STATUS.
+    ENDIF.
+    MODIFY GT_ALV FROM LS_ALV.
+  ENDLOOP.
+  DATA: LV_REPORT  TYPE SY-REPID,
+        LV_INCLUDE TYPE SY-REPID.
+
+  LV_REPORT = LV_INCLUDE = SY-REPID.
+  CALL FUNCTION 'REUSE_ALV_FIELDCATALOG_MERGE'
+    EXPORTING
+      I_PROGRAM_NAME         = LV_REPORT
+      I_INTERNAL_TABNAME     = 'T_OUTPUT'
+      I_INCLNAME             = LV_INCLUDE
+    CHANGING
+      CT_FIELDCAT            = LT_FIELDCAT
+    EXCEPTIONS
+      INCONSISTENT_INTERFACE = 1
+      PROGRAM_ERROR          = 2
+      OTHERS                 = 3.
+
+  IF SY-SUBRC <> 0.
+    MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+            WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+  ENDIF.
+
+  CALL FUNCTION 'REUSE_ALV_GRID_DISPLAY'
+    EXPORTING
+      I_CALLBACK_PROGRAM       = SY-CPROG
+      I_CALLBACK_PF_STATUS_SET = 'SET_PF_STATUS'
+      I_CALLBACK_USER_COMMAND  = 'USER_COMMAND'
+      IS_LAYOUT                = LS_LAYO
+      IT_FIELDCAT              = LT_FIELDCAT
+    TABLES
+      T_OUTTAB                 = GT_ALV.
+
+
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form SET_UP_FIELDCAT
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*&      --> COL_POS
+*&      --> FILEDNAME
+*&      --> TABNAME
+*&      --> SELTEXT_L
+*&      <-- LT_FIELDCAT
+*&---------------------------------------------------------------------*
+FORM SET_UP_FIELDCAT  USING    P_COL_POS
+                               P_FILEDNAME
+                               P_TABNAME
+                               P_SELTEXT_L
+                      CHANGING P_LT_FIELDCAT TYPE SLIS_T_FIELDCAT_ALV.
+
+  DATA: LS_FIELD TYPE SLIS_FIELDCAT_ALV.
+  CLEAR: LS_FIELD.
+
+  LS_FIELD-COL_POS   = P_COL_POS .
+  LS_FIELD-FIELDNAME = P_FILEDNAME.
+  LS_FIELD-TABNAME   = P_TABNAME.
+  LS_FIELD-SELTEXT_L = P_SELTEXT_L.
+  APPEND LS_FIELD TO P_LT_FIELDCAT.
+
+  CLEAR LS_FIELD.
+
+ENDFORM.
+FORM SET_PF_STATUS USING RT_EXTAB TYPE SLIS_T_EXTAB.
+  CLEAR: RT_EXTAB.
+  SET PF-STATUS 'ZGUI_POST_MM' EXCLUDING RT_EXTAB.
+ENDFORM.
+
+FORM USER_COMMAND  USING R_UCOMM LIKE SY-UCOMM
+                         RS_SELFIELD TYPE SLIS_SELFIELD.
+  CASE R_UCOMM.
+    WHEN 'BACK'.
+      LEAVE TO SCREEN 0.
+    WHEN 'EXIT'.
+      LEAVE PROGRAM.
+    WHEN 'CANCEL'.
+      LEAVE TO SCREEN 0.
+    WHEN 'EXECUTE'.
+      PERFORM POST_MM.
+  ENDCASE.
+ENDFORM.
+
+FORM POST_MM .
+  TYPES: BEGIN OF TY_DISPLAY_SORT,
+           EBELN     TYPE EBELN,
+           EBELP     TYPE EBELP,
+           BUDAT     TYPE BUDAT,
+           STATUS    TYPE CHAR1,
+           COMMENT   TYPE CHAR2048,
+           TNGH      TYPE CHAR200,
+           MATNR     TYPE MATNR,
+           MAKTX     TYPE MAKTX,
+           PLANT     TYPE WERKS_D,
+           SLOC      TYPE LGORT_D,
+           QTY       TYPE MENGE_D,
+           MEINS     TYPE MEINS,
+           SERIAL    TYPE STRING,
+           SERNP     TYPE SERAIL,
+           MOVE_TYPE TYPE BWART,
+         END OF TY_DISPLAY_SORT.
+
+  DATA: LS_HEADER     TYPE BAPI2017_GM_HEAD_01,
+        LT_ITEMS      TYPE STANDARD TABLE OF BAPI2017_GM_ITEM_CREATE INITIAL SIZE 0,
+        LS_ITEM       TYPE BAPI2017_GM_ITEM_CREATE,
+        LT_RETURN     TYPE STANDARD TABLE OF BAPIRET2 INITIAL SIZE 0,
+        LS_RETURN     TYPE BAPIRET2,
+        LV_MATDOC_ITM TYPE MBLPO,
+        LV_MATNR      TYPE MATNR,
+        LV_DOC        TYPE MBLNR,
+        LV_YEAR       TYPE MJAHR.
+  DATA: LT_SE TYPE STANDARD TABLE OF  BAPI2017_GM_SERIALNUMBER,
+        LS_SE	TYPE BAPI2017_GM_SERIALNUMBER.
+  DATA: LV_MSG   TYPE STRING,
+        LV_SUBRC TYPE SY-SUBRC.
+
+
+
+  DATA: LT_TMP TYPE TABLE OF TY_DISPLAY_SORT.
+  MOVE-CORRESPONDING GT_ALV TO LT_TMP.
+  SORT LT_TMP BY EBELN EBELP.
+
+  LOOP AT LT_TMP ASSIGNING FIELD-SYMBOL(<FS_TMP>).
+    AT NEW EBELN.
+      LS_HEADER-PSTNG_DATE = <FS_TMP>-BUDAT.
+      LS_HEADER-DOC_DATE   = SY-DATUM.
+      LS_HEADER-PR_UNAME   = SY-UNAME.
+      LS_HEADER-HEADER_TXT = <FS_TMP>-TNGH.
+    ENDAT.
+
+    LV_MATDOC_ITM = LV_MATDOC_ITM + 1.
+    CLEAR: LS_ITEM.
+
+    LS_ITEM-MOVE_TYPE = <FS_TMP>-MOVE_TYPE.
+    LS_ITEM-MATERIAL  = <FS_TMP>-MATNR.
+    LS_ITEM-PLANT     = <FS_TMP>-PLANT.
+    LS_ITEM-STGE_LOC  = <FS_TMP>-SLOC.
+    LS_ITEM-PO_NUMBER = <FS_TMP>-EBELN.
+    LS_ITEM-PO_ITEM   = <FS_TMP>-EBELP.
+    LS_ITEM-ENTRY_QNT = <FS_TMP>-QTY.
+    LS_ITEM-BASE_UOM  = <FS_TMP>-MEINS.
+
+    LS_ITEM-MVT_IND   = 'B'.
+    "Movement indicator B stands for a goods movement for a purchase order, whereas movement indicator F stands for a goods movement for a work order.
+    "The system determines the movement indicator for the movement type on the basis of the transaction code of the transaction used for the posting activity.
+
+
+*    LS_ITEM-BATCH     = ? "Update
+    APPEND LS_ITEM TO LT_ITEMS.
+
+    IF <FS_TMP>-SERIAL IS NOT INITIAL.
+      CLEAR: LS_SE.
+      LS_SE-MATDOC_ITM = LV_MATDOC_ITM.
+      LS_SE-SERIALNO = <FS_TMP>-SERIAL.
+      APPEND LS_SE TO LT_SE.
+    ENDIF.
+
+    AT END OF EBELN.
+      BREAK QUYNHBC.
+      CALL FUNCTION 'BAPI_GOODSMVT_CREATE'
+        EXPORTING
+          GOODSMVT_HEADER       = LS_HEADER             " Material Document Header Data
+          GOODSMVT_CODE         = '01'                  " Assign Code to Transaction for Goods Movement
+*         TESTRUN               = SPACE                 " Simulate Goods Movement
+*         GOODSMVT_REF_EWM      =                       " BAPI Communication Structure: Material Document EWM Ref.
+*         GOODSMVT_PRINT_CTRL   =                       " BAPI Communication Structure: Material Document Print Contro
+        IMPORTING
+*         GOODSMVT_HEADRET      =                       " Material Document Number/Material Document Year
+          MATERIALDOCUMENT      = LV_DOC                " Number of Material Document
+          MATDOCUMENTYEAR       = LV_YEAR               " Material Document Year
+        TABLES
+          GOODSMVT_ITEM         = LT_ITEMS              " Material Document Items
+          GOODSMVT_SERIALNUMBER = LT_SE                 " Serial Number
+          RETURN                = LT_RETURN             " Return Messages
+*         GOODSMVT_SERV_PART_DATA =
+*         EXTENSIONIN           =                       " Reference Structure for BAPI Parameters EXTENSIONIN/EXTENSIONOUT
+*         GOODSMVT_ITEM_CWM     =                       " BAPI Communication Structure: Create Item Data for CW
+        .
+      BREAK QUYNHBC.
+      SORT LT_RETURN BY TYPE.
+      READ TABLE LT_RETURN INTO LS_RETURN WITH KEY TYPE = 'E' BINARY SEARCH.
+      IF SY-SUBRC = 0.
+        CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'
+          IMPORTING
+            RETURN = LS_RETURN.
+      ELSE.
+        CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+          EXPORTING
+            WAIT   = ABAP_TRUE
+          IMPORTING
+            RETURN = LS_RETURN.
+
+        MESSAGE  | Material Document { LV_DOC } year { LV_YEAR } |  TYPE 'E'.
+      ENDIF.
+    ENDAT.
+
+  ENDLOOP.
+ENDFORM.
